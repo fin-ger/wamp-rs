@@ -58,12 +58,12 @@ pub struct Registration {
     registration_id: ID
 }
 
-struct SubscriptionCallbackWrapper {
-    callback: Box<FnMut(List, Dict)>
+struct SubscriptionCallbackWrapper<'client> {
+    callback: &'client mut FnMut(List, Dict)
 }
 
-struct RegistrationCallbackWrapper {
-    callback: Box<FnMut(List, Dict) -> CallResult<(Option<List>, Option<Dict>)>>
+struct RegistrationCallbackWrapper<'client> {
+    callback: &'client mut FnMut(List, Dict) -> CallResult<(Option<List>, Option<Dict>)>
 }
 
 static WAMP_JSON:&'static str = "wamp.2.json";
@@ -77,40 +77,40 @@ enum ConnectionState {
     Disconnected
 }
 
-type ConnectionResult = Result<Arc<Mutex<ConnectionInfo>>, Error>;
+type ConnectionResult<'client> = Result<Arc<Mutex<ConnectionInfo<'client>>>, Error>;
 
-unsafe impl <'a> Send for ConnectionInfo {}
+unsafe impl<'client> Send for ConnectionInfo<'client> {}
 
-unsafe impl<'a> Sync for ConnectionInfo {}
+unsafe impl<'client> Sync for ConnectionInfo<'client> {}
 
-unsafe impl <'a> Send for SubscriptionCallbackWrapper {}
+unsafe impl<'client> Send for SubscriptionCallbackWrapper<'client> {}
 
-unsafe impl<'a> Sync for SubscriptionCallbackWrapper {}
+unsafe impl<'client> Sync for SubscriptionCallbackWrapper<'client> {}
 
-unsafe impl <'a> Send for RegistrationCallbackWrapper {}
+unsafe impl<'client> Send for RegistrationCallbackWrapper<'client> {}
 
-unsafe impl<'a> Sync for RegistrationCallbackWrapper {}
+unsafe impl<'client> Sync for RegistrationCallbackWrapper<'client> {}
 
-pub struct Client {
-    connection_info: Arc<Mutex<ConnectionInfo>>,
+pub struct Client<'client> {
+    connection_info: Arc<Mutex<ConnectionInfo<'client>>>,
     max_session_id: ID,
 }
 
-pub struct ConnectionHandler {
-    connection_info: Arc<Mutex<ConnectionInfo>>,
+pub struct ConnectionHandler<'client> {
+    connection_info: Arc<Mutex<ConnectionInfo<'client>>>,
     realm: URI,
-    state_transmission: CHSender<ConnectionResult>
+    state_transmission: CHSender<ConnectionResult<'client>>
 }
 
-struct ConnectionInfo {
+struct ConnectionInfo<'client> {
     connection_state: ConnectionState,
     sender: Sender,
-    subscription_requests: HashMap<ID, (Complete<Subscription, CallError>, SubscriptionCallbackWrapper, URI)>,
+    subscription_requests: HashMap<ID, (Complete<Subscription, CallError>, SubscriptionCallbackWrapper<'client>, URI)>,
     unsubscription_requests: HashMap<ID, (Complete<(), CallError>, ID)>,
-    subscriptions: HashMap<ID, SubscriptionCallbackWrapper>,
-    registrations: HashMap<ID, RegistrationCallbackWrapper>,
+    subscriptions: HashMap<ID, SubscriptionCallbackWrapper<'client>>,
+    registrations: HashMap<ID, RegistrationCallbackWrapper<'client>>,
     call_requests: HashMap<ID, Complete<(List, Dict), CallError>>,
-    registration_requests: HashMap<ID, (Complete<Registration, CallError>, RegistrationCallbackWrapper, URI)>,
+    registration_requests: HashMap<ID, (Complete<Registration, CallError>, RegistrationCallbackWrapper<'client>, URI)>,
     unregistration_requests: HashMap<ID, (Complete<(), CallError>, ID)>,
     protocol: String,
     publish_requests: HashMap<ID, Complete<ID, CallError>>,
@@ -122,7 +122,7 @@ trait MessageSender {
     fn send_message(&self, message: Message) -> WampResult<()>;
 }
 
-impl MessageSender for ConnectionInfo{
+impl<'client> MessageSender for ConnectionInfo<'client> {
     fn send_message(&self, message: Message) -> WampResult<()> {
 
         debug!("Sending message {:?} via {}", message, self.protocol);
@@ -163,7 +163,7 @@ impl Connection {
         }
     }
 
-    pub fn connect<'a>(&self) -> WampResult<Client> {
+    pub fn connect<'client>(&self) -> WampResult<Client<'client>> {
         let (tx, rx) = channel();
         let url = self.url.clone();
         let realm = self.realm.clone();
@@ -204,7 +204,7 @@ impl Connection {
             }
         });
         let info = try!(rx.recv().unwrap());
-        Ok(Client{
+        Ok(Client::<'client> {
             connection_info: info,
             max_session_id: 0
         })
@@ -228,7 +228,7 @@ macro_rules! cancel_future {
     });
 }
 
-impl Handler for ConnectionHandler {
+impl<'client> Handler for ConnectionHandler<'client> {
     fn on_open(&mut self, handshake: Handshake) -> WSResult<()> {
         debug!("Connection Opened");
         let mut info = self.connection_info.lock().unwrap();
@@ -335,7 +335,7 @@ impl Handler for ConnectionHandler {
 }
 
 
-impl ConnectionHandler {
+impl<'client> ConnectionHandler<'client> {
 
     fn handle_message(&mut self, message: Message) -> bool {
         let mut info = self.connection_info.lock().unwrap();
@@ -641,14 +641,14 @@ impl ConnectionHandler {
 
 }
 
-impl Client {
+impl<'client> Client<'client> {
 
     fn get_next_session_id(&mut self) -> ID {
         self.max_session_id += 1;
         self.max_session_id
     }
 
-    pub fn subscribe_with_pattern(&mut self, topic_pattern: URI, callback: Box<FnMut(List, Dict)>, policy: MatchingPolicy) -> WampResult<Future<Subscription, CallError>> {
+    pub fn subscribe_with_pattern(&mut self, topic_pattern: URI, callback: &'client mut FnMut(List, Dict), policy: MatchingPolicy) -> WampResult<Future<Subscription, CallError>> {
         // Send a subscribe messages
         let request_id = self.get_next_session_id();
         let (complete, future) = Future::<Subscription, CallError>::pair();
@@ -663,11 +663,11 @@ impl Client {
         Ok(future)
     }
 
-    pub fn subscribe(&mut self, topic: URI, callback: Box<FnMut(List, Dict)>) -> WampResult<Future<Subscription, CallError>> {
+    pub fn subscribe(&mut self, topic: URI, callback: &'client mut FnMut(List, Dict)) -> WampResult<Future<Subscription, CallError>> {
         self.subscribe_with_pattern(topic, callback, MatchingPolicy::Strict)
     }
 
-    pub fn register_with_pattern(&mut self, procedure_pattern: URI, callback: Box<FnMut(List, Dict) -> CallResult<(Option<List>, Option<Dict>)> >, policy: MatchingPolicy) -> WampResult<Future<Registration, CallError>> {
+    pub fn register_with_pattern(&mut self, procedure_pattern: URI, callback: &'client mut FnMut(List, Dict) -> CallResult<(Option<List>, Option<Dict>)>, policy: MatchingPolicy) -> WampResult<Future<Registration, CallError>> {
         // Send a register messages
         let request_id = self.get_next_session_id();
         let (complete, future) = Future::<Registration, CallError>::pair();
@@ -684,7 +684,7 @@ impl Client {
         Ok(future)
     }
 
-    pub fn register(&mut self, procedure: URI, callback: Box<FnMut(List, Dict) -> CallResult<(Option<List>, Option<Dict>)> >) -> WampResult<Future<Registration, CallError>> {
+    pub fn register(&mut self, procedure: URI, callback: &'client mut FnMut(List, Dict) -> CallResult<(Option<List>, Option<Dict>)>) -> WampResult<Future<Registration, CallError>> {
         self.register_with_pattern(procedure, callback, MatchingPolicy::Strict)
     }
 
@@ -750,7 +750,7 @@ impl Client {
     }
 }
 
-impl fmt::Debug for ConnectionHandler {
+impl<'client> fmt::Debug for ConnectionHandler<'client> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{{Connection id: {}}}", self.connection_info.lock().unwrap().session_id)
     }
