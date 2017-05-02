@@ -165,46 +165,37 @@ impl Connection {
 
     pub fn connect<'client>(&self) -> WampResult<Client<'client>> {
         let (tx, rx) = channel();
-        let url = self.url.clone();
-        let realm = self.realm.clone();
-        thread::spawn(move || {
-            trace!("Beginning Connection");
-            let connect_result = connect(url, |out| {
-                trace!("Got sender");
-                // Set up timeout
-                out.timeout(5000, CONNECTION_TIMEOUT).unwrap();
-                let info = Arc::new(Mutex::new(ConnectionInfo {
-                    protocol: String::new(),
-                    subscription_requests: HashMap::new(),
-                    unsubscription_requests: HashMap::new(),
-                    subscriptions: HashMap::new(),
-                    registrations: HashMap::new(),
-                    call_requests: HashMap::new(),
-                    registration_requests: HashMap::new(),
-                    unregistration_requests: HashMap::new(),
-                    sender: out,
-                    connection_state: ConnectionState::Connecting,
-                    publish_requests: HashMap::new(),
-                    shutdown_complete: None,
-                    session_id: 0
-                }));
-                let handler = ConnectionHandler {
-                    state_transmission: tx.clone(),
-                    connection_info: info,
-                    realm: realm.clone()
-                };
-                handler
-            }).map_err(|e| {
-                Error::new(ErrorKind::WSError(e))
-            });
-            debug!("Result of connection: {:?}", connect_result);
-            match connect_result {
-                Ok(_) => (),
-                Err(e) => {tx.send(Err(e)).unwrap();}
+        trace!("Beginning Connection");
+        let connect_result = connect(self.url.clone(), |out| {
+            trace!("Got sender");
+            // Set up timeout
+            out.timeout(5000, CONNECTION_TIMEOUT).unwrap();
+            let info = Arc::new(Mutex::new(ConnectionInfo {
+                protocol: String::new(),
+                subscription_requests: HashMap::new(),
+                unsubscription_requests: HashMap::new(),
+                subscriptions: HashMap::new(),
+                registrations: HashMap::new(),
+                call_requests: HashMap::new(),
+                registration_requests: HashMap::new(),
+                unregistration_requests: HashMap::new(),
+                sender: out,
+                connection_state: ConnectionState::Connecting,
+                publish_requests: HashMap::new(),
+                shutdown_complete: None,
+                session_id: 0
+            }));
+            ConnectionHandler {
+                state_transmission: tx.clone(),
+                connection_info: info,
+                realm: self.realm.clone()
             }
-        });
+        }).map_err(|e| Error::new(ErrorKind::WSError(e)));
+
+        debug!("Result of connection: {:?}", connect_result);
+        try!(connect_result);
         let info = try!(rx.recv().unwrap());
-        Ok(Client::<'client> {
+        Ok(Client {
             connection_info: info,
             max_session_id: 0
         })
